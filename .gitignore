@@ -1,0 +1,26 @@
+# Rust
+/target/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Sensitive data files
+debug_response*.json
+debug_response*.txt
+*.backup
+
+# Cache files (keep cache_backup.json for deployment)
+# cache_backup.json should be included for deployment
