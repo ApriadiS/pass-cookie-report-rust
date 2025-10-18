@@ -24,3 +24,5 @@ debug_response*.txt
 
 # Cache files (keep cache_backup.json for deployment)
 # cache_backup.json should be included for deployment
+.github
+.github\
