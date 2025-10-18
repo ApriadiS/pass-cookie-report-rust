@@ -1,0 +1,19 @@
+# Docker Compose for ARM64 architecture
+services:
+  pass-cookie-report-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+    container_name: pass-cookie-report-rust-arm64
+    ports:
+      - "${EXTERNAL_PORT:-3000}:${PORT:-3000}"
+    env_file:
+      - .env
+    volumes:
+      - ./cache_backup.json:/app/cache_backup.json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
