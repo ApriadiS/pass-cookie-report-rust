@@ -54,6 +54,19 @@ impl AppState {
     pub async fn load_cache_from_file(&self) -> Result<(), Box<dyn std::error::Error>> {
         use crate::services::CacheService;
         
+        // Clean empty entries from file first
+        match CacheService::clean_empty_cache_entries(self).await {
+            Ok(cleaned) => {
+                if cleaned > 0 {
+                    info!("[STARTUP] Cleaned {} empty cache entries from file", cleaned);
+                }
+            }
+            Err(e) => {
+                warn!("[STARTUP] Failed to clean empty entries: {:?}", e);
+            }
+        }
+        
+        // Then load cleaned cache to memory
         match CacheService::load_all_from_file_cache(self).await {
             Ok(count) => {
                 if count > 0 {
