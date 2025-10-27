@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use chrono::NaiveDate;
-use tracing::info;
 
 pub struct DateService;
 
@@ -19,7 +18,6 @@ impl DateService {
         
         for format in &formats {
             if let Ok(date) = NaiveDate::parse_from_str(date_str, format) {
-                info!("[DATE] Parsed '{}' using format '{}'", date_str, format);
                 return Ok(date);
             }
         }
@@ -32,7 +30,6 @@ impl DateService {
     pub fn normalize_date_for_api(date_str: &str) -> Result<String, chrono::ParseError> {
         let date = Self::parse_date(date_str)?;
         let normalized = date.format("%d/%m/%Y").to_string();
-        info!("[DATE] Normalized '{}' to '{}' for API", date_str, normalized);
         Ok(normalized)
     }
 
