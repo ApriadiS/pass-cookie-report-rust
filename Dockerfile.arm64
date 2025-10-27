@@ -22,7 +22,6 @@ RUN apk add --no-cache libssl3 ca-certificates
 
 WORKDIR /app
 COPY --from=builder /usr/src/app/target/aarch64-unknown-linux-musl/release/pass-cookie-report-rust .
-COPY cache_backup.json .
 
 EXPOSE 3000
 CMD ["./pass-cookie-report-rust"]
