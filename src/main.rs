@@ -36,13 +36,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(root))
-        .route("/echo", post(echo))
-        .route("/data", post(get_data_by_from_date_to_date))
-        .route("/data-debug", post(get_data_by_from_date_to_date_debugging))
-        .route("/start-fetch", post(start_fetch_data))
         .route("/data-cached", post(get_cached_data))
         .route("/force-refresh", post(force_refresh_data))
-        .route("/force-empty", post(force_empty_cache))
         .route("/login", get(get_login_status).post(post_login))
         .with_state(state)
         .layer(
