@@ -20,5 +20,5 @@ scraper = "0.20"
 chrono = "0.4"
 
 [[bin]]
-name = "axum_api"
+name = "pass-cookie-report-rust"
 path = "src/main.rs"
