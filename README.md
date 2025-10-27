@@ -1,4 +1,4 @@
-# 🦀 Pass Cookie Report Rust
+# 🦀 Pass Cookie Report Rust v1.2.0
 
 A high-performance Rust-based API server for transaction reporting with intelligent caching and multi-architecture Docker support.
 
@@ -59,13 +59,9 @@ chmod +x deploy-arm64.sh
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/` | Health check |
-| `POST` | `/echo` | Echo test endpoint |
-| `POST` | `/data` | Get transaction data by date range |
-| `POST` | `/data-debug` | Debug version with detailed logging |
-| `POST` | `/start-fetch` | Start background data fetching |
-| `POST` | `/data-cached` | Get cached transaction data |
-| `POST` | `/force-refresh` | Force refresh cache |
-| `POST` | `/force-empty` | Empty cache |
+| `POST` | `/data-cached` | Get cached transaction data with smart fetching |
+| `POST` | `/force-refresh` | Force refresh all cache from database |
+| `POST` | `/login` | Login endpoint for authentication |
 
 ### Example Usage
 
@@ -73,21 +69,21 @@ chmod +x deploy-arm64.sh
 # Health check
 curl http://localhost:3000/
 
-# Get transaction data
-curl -X POST http://localhost:3000/data \
+# Get cached transaction data (with smart fetching)
+curl -X POST http://localhost:3000/data-cached \
   -H "Content-Type: application/json" \
   -d '{
-    "from": "2024-01-01",
-    "to": "2024-01-31",
+    "from": "01/10/2025",
+    "to": "27/10/2025",
     "cookie": "your_session_cookie"
   }'
 
-# Start background fetch
-curl -X POST http://localhost:3000/start-fetch \
+# Force refresh cache
+curl -X POST http://localhost:3000/force-refresh \
   -H "Content-Type: application/json" \
   -d '{
-    "from": "2024-01-01",
-    "to": "2024-12-31",
+    "from": "01/10/2025",
+    "to": "27/10/2025",
     "cookie": "your_session_cookie"
   }'
 ```
