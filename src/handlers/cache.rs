@@ -1,13 +1,13 @@
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{http::StatusCode, response::IntoResponse, Json, extract::State};
 use serde_json::json;
-// Removed unused imports
-use crate::models::Payload;
-use crate::services::{CacheService, DateService};
+use crate::models::{Payload, response::{TransaksiResponse, CachedDataResponse}};
+use crate::services::{CacheService, DateService, TransactionService};
 use crate::state::AppState;
+use crate::errors::DebugAppError;
 use tracing::{info, error};
 
 pub async fn start_fetch_data(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<Payload>,
 ) -> impl IntoResponse {
     // Cleanup old jobs
@@ -15,16 +15,25 @@ pub async fn start_fetch_data(
 
     // Validasi payload
     if payload.cookie.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"status": "invalid_cookie"})));
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "invalid_cookie",
+            "message": "Cookie is required"
+        })));
     }
 
     // Validasi range tanggal
     if let Ok(dates) = DateService::get_date_range(&payload.from, &payload.to) {
         if dates.len() > 365 {
-            return (StatusCode::BAD_REQUEST, Json(json!({"status": "range_too_large"})));
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "status": "range_too_large",
+                "message": "Date range cannot exceed 365 days"
+            })));
         }
     } else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"status": "invalid_date_range"})));
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "invalid_date_range",
+            "message": "Invalid date format. Use DD/MM/YYYY format"
+        })));
     }
 
     // Start job dengan per-range tracking
@@ -68,15 +77,26 @@ pub async fn start_fetch_data(
 }
 
 pub async fn force_empty_cache(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<Payload>,
 ) -> impl IntoResponse {
+    // Check if force_empty is already running
+    if !state.start_admin_operation("force_empty").await {
+        return (StatusCode::CONFLICT, Json(json!({
+            "status": "already_running",
+            "message": "Force empty operation is already in progress"
+        })));
+    }
+
     // Cleanup old jobs
     state.cleanup_old_jobs().await;
 
     // Validasi payload
     if payload.cookie.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"status": "invalid_cookie"})));
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "invalid_cookie",
+            "message": "Cookie is required"
+        })));
     }
 
     // Cek dan hapus hanya cache yang kosong
@@ -132,6 +152,9 @@ pub async fn force_empty_cache(
         };
         
         state_clone.complete_job(&job_id_clone, final_status).await;
+        
+        // Mark admin operation as completed
+        state_clone.complete_admin_operation("force_empty").await;
     });
 
     (StatusCode::OK, Json(json!({
@@ -143,15 +166,26 @@ pub async fn force_empty_cache(
 }
 
 pub async fn force_refresh_data(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<Payload>,
 ) -> impl IntoResponse {
+    // Check if force_refresh is already running
+    if !state.start_admin_operation("force_refresh").await {
+        return (StatusCode::CONFLICT, Json(json!({
+            "status": "already_running",
+            "message": "Force refresh operation is already in progress"
+        })));
+    }
+
     // Cleanup old jobs
     state.cleanup_old_jobs().await;
 
     // Validasi payload
     if payload.cookie.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"status": "invalid_cookie"})));
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "invalid_cookie",
+            "message": "Cookie is required"
+        })));
     }
 
     // Hapus cache untuk range ini agar dipaksa fetch ulang
@@ -195,6 +229,9 @@ pub async fn force_refresh_data(
         };
         
         state_clone.complete_job(&job_id_clone, final_status).await;
+        
+        // Mark admin operation as completed
+        state_clone.complete_admin_operation("force_refresh").await;
     });
 
     (StatusCode::OK, Json(json!({
@@ -204,47 +241,44 @@ pub async fn force_refresh_data(
 }
 
 pub async fn get_cached_data(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<Payload>,
 ) -> impl IntoResponse {
     // Cleanup old jobs
     state.cleanup_old_jobs().await;
 
-    let job_id = AppState::generate_job_id(&payload);
-    
-    // Cek status job spesifik untuk range ini
-    if let Some(job_status) = state.get_job_status(&job_id).await {
-        match job_status {
-            crate::state::JobStatus::Running => {
-                return (StatusCode::ACCEPTED, Json(json!({
-                    "status": "processing",
-                    "job_id": job_id
-                })));
-            }
-            crate::state::JobStatus::Failed(error) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
-                    "status": "failed",
-                    "job_id": job_id,
-                    "error": error
-                })));
-            }
-            crate::state::JobStatus::Completed => {
-                // Continue to fetch data
-            }
+    // Always try with provided cookie (don't check global unauthorized state)
+    match TransactionService::fetch_direct_two_loops(&payload).await {
+        Ok(response) => {
+            // Reset unauthorized state on success
+            state.set_unauthorized(false).await;
+            
+            let transaksi_response = TransaksiResponse {
+                total_transaksi: response.total_transaksi,
+                data: response.data,
+            };
+            let response = CachedDataResponse {
+                status: "completed".to_string(),
+                job_id: AppState::generate_job_id(&payload),
+                data: transaksi_response,
+                message: None,
+            };
+            (StatusCode::OK, Json(serde_json::to_value(response).unwrap()))
         }
-    }
-
-    match CacheService::get_date_range_data(&state, &payload).await {
-        Ok(data) => {
-            (StatusCode::OK, Json(json!({
-                "status": "completed",
-                "job_id": job_id,
-                "data": data
+        Err(e) => {
+            if matches!(e, DebugAppError::Unauthorized(_)) {
+                // Set unauthorized state only after actual failure
+                state.set_unauthorized(true).await;
+                return (StatusCode::UNAUTHORIZED, Json(json!({
+                    "status": "unauthorized",
+                    "message": "Session expired or invalid cookie"
+                })));
+            }
+            
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "status": "error",
+                "message": format!("{:?}", e)
             })))
         }
-        Err(_) => (StatusCode::NOT_FOUND, Json(json!({
-            "status": "not_found",
-            "job_id": job_id
-        })))
     }
 }

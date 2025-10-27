@@ -43,6 +43,7 @@ async fn main() {
         .route("/data-cached", post(get_cached_data))
         .route("/force-refresh", post(force_refresh_data))
         .route("/force-empty", post(force_empty_cache))
+        .route("/login", get(get_login_status).post(post_login))
         .with_state(state)
         .layer(
             CorsLayer::new()

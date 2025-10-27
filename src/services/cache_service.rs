@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused_variables)]
 
 use crate::errors::DebugAppError;
 use crate::models::{DebugResponse, Payload, Transaksi};
@@ -26,19 +27,52 @@ impl CacheService {
 
     // 2. Load ALL file cache ke memory (one-time operation)
     pub async fn load_all_from_file_cache(state: &AppState) -> Result<usize, DebugAppError> {
+        // Clean empty entries first
+        Self::clean_empty_cache_entries(state).await?;
+        
         let cache_file_path = Self::get_cache_file_path();
         if let Ok(file_content) = fs::read_to_string(&cache_file_path).await {
             if let Ok(file_cache) = serde_json::from_str::<HashMap<String, Vec<Transaksi>>>(&file_content) {
                 let count = file_cache.len();
                 let mut cache_write = state.cache.write().await;
                 
-                // Merge dengan existing cache (tidak overwrite)
+                // Merge dengan existing cache (tidak overwrite), skip empty entries
                 for (date, transactions) in file_cache {
-                    cache_write.entry(date).or_insert(transactions);
+                    if !transactions.is_empty() {
+                        cache_write.entry(date).or_insert(transactions);
+                    }
                 }
                 
                 info!("[FILE_CACHE] Loaded {} dates to memory cache", count);
                 return Ok(count);
+            }
+        }
+        Ok(0)
+    }
+
+    // Clean empty entries from file cache
+    pub async fn clean_empty_cache_entries(state: &AppState) -> Result<usize, DebugAppError> {
+        let cache_file_path = Self::get_cache_file_path();
+        if let Ok(file_content) = fs::read_to_string(&cache_file_path).await {
+            if let Ok(mut file_cache) = serde_json::from_str::<HashMap<String, Vec<Transaksi>>>(&file_content) {
+                let original_count = file_cache.len();
+                
+                // Remove empty entries
+                file_cache.retain(|_, transactions| !transactions.is_empty());
+                
+                let cleaned_count = original_count - file_cache.len();
+                
+                if cleaned_count > 0 {
+                    // Save cleaned cache back to file
+                    let json_data = serde_json::to_string_pretty(&file_cache)
+                        .map_err(|e| DebugAppError::Serialization(e.to_string()))?;
+                    fs::write(&cache_file_path, json_data).await
+                        .map_err(|e| DebugAppError::FileWrite(e.to_string()))?;
+                    
+                    info!("[CACHE_CLEAN] Removed {} empty entries from backup file", cleaned_count);
+                }
+                
+                return Ok(cleaned_count);
             }
         }
         Ok(0)
@@ -118,6 +152,30 @@ impl CacheService {
         Self::save_cache_to_file(state).await
     }
 
+    pub async fn get_date_range_transactions(state: &AppState, payload: &Payload) -> Result<Vec<Transaksi>, DebugAppError> {
+        let dates = DateService::get_date_range(&payload.from, &payload.to)
+            .map_err(|_| DebugAppError::DateParse("Invalid date format".to_string()))?;
+        
+        let mut all_transactions = Vec::new();
+        let mut missing_dates = Vec::new();
+        
+        // Check cache first
+        for date in &dates {
+            if let Some(transactions) = Self::get_cached_transactions_for_date(state, date).await {
+                all_transactions.extend(transactions);
+            } else {
+                missing_dates.push(date.clone());
+            }
+        }
+        
+        // If no cached data found, return error to trigger fetch
+        if all_transactions.is_empty() && !missing_dates.is_empty() {
+            return Err(DebugAppError::DateParse("No cached data found".to_string()));
+        }
+        
+        Ok(all_transactions)
+    }
+
     pub async fn get_date_range_data(state: &AppState, payload: &Payload) -> Result<DebugResponse, DebugAppError> {
         let dates = DateService::get_date_range(&payload.from, &payload.to)
             .map_err(|_| DebugAppError::DateParse("Invalid date format".to_string()))?;
@@ -154,7 +212,10 @@ impl CacheService {
                 
                 match TransactionService::fetch_all_pages(&single_date_payload).await {
                     Ok(response) => {
-                        Self::cache_transactions_for_date(state, &date, response.data.clone()).await;
+                        // Only cache if data is not empty
+                        if !response.data.is_empty() {
+                            Self::cache_transactions_for_date(state, &date, response.data.clone()).await;
+                        }
                         all_transactions.extend(response.data);
                     }
                     Err(e) => {
@@ -233,8 +294,13 @@ impl CacheService {
                         let estimated_size = response.data.len() * 200;
                         batch_memory_usage += estimated_size;
                         
-                        Self::cache_transactions_for_date(&state, date, response.data).await;
-                        info!("[JOB:{}] Berhasil fetch tanggal {}", job_id, date);
+                        // Only cache if data is not empty
+                        if !response.data.is_empty() {
+                            Self::cache_transactions_for_date(&state, date, response.data).await;
+                            info!("[JOB:{}] Berhasil fetch dan cache tanggal {}", job_id, date);
+                        } else {
+                            info!("[JOB:{}] Tanggal {} kosong, tidak di-cache", job_id, date);
+                        }
                         
                         if batch_memory_usage > max_memory_mb * 1024 * 1024 {
                             info!("[JOB:{}] Memory limit reached, processing batch", job_id);
@@ -243,6 +309,13 @@ impl CacheService {
                     }
                     Err(e) => {
                         error!("[JOB:{}] Failed fetch tanggal {} after retries: {:?}", job_id, date, e);
+                        
+                        // If unauthorized, set state and stop entire job
+                        if matches!(e, DebugAppError::Unauthorized(_)) {
+                            error!("[JOB:{}] Unauthorized - stopping entire job", job_id);
+                            state.set_unauthorized(true).await;
+                            return Err(e);
+                        }
                     }
                 }
                 
@@ -283,9 +356,15 @@ impl CacheService {
                     return Ok(response);
                 }
                 Err(e) => {
+                    // If unauthorized, don't retry - return immediately
+                    if matches!(e, DebugAppError::Unauthorized(_)) {
+                        error!("[RETRY] Unauthorized error for {} - stopping retries", payload.from);
+                        return Err(e);
+                    }
+                    
                     last_error = Some(e);
                     if attempt < max_retries {
-                        let delay = Duration::from_millis(1000 * attempt as u64); // Exponential backoff
+                        let delay = Duration::from_millis(1000 * attempt as u64);
                         warn!("[RETRY] Attempt {} failed for {}, retrying in {:?}", attempt, payload.from, delay);
                         sleep(delay).await;
                     }

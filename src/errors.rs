@@ -30,6 +30,7 @@ pub enum DebugAppError {
     DateParse(String),
     Serialization(String),
     FileWrite(String),
+    Unauthorized(String),
 }
 
 impl IntoResponse for DebugAppError {
@@ -54,6 +55,10 @@ impl IntoResponse for DebugAppError {
             DebugAppError::FileWrite(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("File write error: {}", e),
+            ),
+            DebugAppError::Unauthorized(e) => (
+                StatusCode::UNAUTHORIZED,
+                format!("Unauthorized: {}", e),
             ),
         };
 

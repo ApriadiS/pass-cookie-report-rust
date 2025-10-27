@@ -1,12 +1,11 @@
-use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaksi {
-    pub tanggal_transaksi: Option<NaiveDate>,
-    pub waktu_transaksi: Option<NaiveDateTime>,
+    pub tanggal_transaksi: String,
+    pub waktu_transaksi: String,
     pub keterangan: String,
-    pub total_tagihan: u64,
+    pub total_tagihan: i64,
     pub no_nota: String,
 }
 

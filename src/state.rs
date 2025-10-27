@@ -29,6 +29,8 @@ pub struct AppState {
     pub processing: Arc<RwLock<HashMap<String, bool>>>, // Key: tanggal yang sedang diproses
     pub jobs: Arc<RwLock<HashMap<String, JobInfo>>>, // Key: job_id, Value: job info
     pub active_jobs_count: Arc<AtomicBool>, // Simple flag untuk backward compatibility
+    pub admin_operations: Arc<RwLock<HashMap<String, bool>>>, // Track running admin operations
+    pub unauthorized_state: Arc<RwLock<bool>>, // Track unauthorized state
 }
 
 impl AppState {
@@ -44,6 +46,8 @@ impl AppState {
             processing: Arc::new(RwLock::new(HashMap::new())),
             jobs: Arc::new(RwLock::new(HashMap::new())),
             active_jobs_count: Arc::new(AtomicBool::new(false)),
+            admin_operations: Arc::new(RwLock::new(HashMap::new())),
+            unauthorized_state: Arc::new(RwLock::new(true)),
         }
     }
 
@@ -129,5 +133,45 @@ impl AppState {
         // Cleanup stuck processing flags juga
         drop(jobs);
         self.cleanup_stuck_processing().await;
+    }
+
+    /// Check if admin operation can be started (only one instance allowed)
+    pub async fn start_admin_operation(&self, operation: &str) -> bool {
+        let mut ops = self.admin_operations.write().await;
+        
+        // Check if operation is already running
+        if ops.get(operation).unwrap_or(&false) == &true {
+            info!("[ADMIN] Operation '{}' blocked - already running", operation);
+            return false;
+        }
+        
+        // Mark operation as running
+        ops.insert(operation.to_string(), true);
+        info!("[ADMIN] Operation '{}' started", operation);
+        true
+    }
+    
+    /// Mark admin operation as completed
+    pub async fn complete_admin_operation(&self, operation: &str) {
+        let mut ops = self.admin_operations.write().await;
+        ops.insert(operation.to_string(), false);
+        info!("[ADMIN] Operation '{}' completed", operation);
+    }
+
+    /// Set unauthorized state
+    pub async fn set_unauthorized(&self, unauthorized: bool) {
+        let mut state = self.unauthorized_state.write().await;
+        *state = unauthorized;
+        if unauthorized {
+            info!("[AUTH] Unauthorized state set - future requests will be rejected");
+        } else {
+            info!("[AUTH] Unauthorized state cleared");
+        }
+    }
+
+    /// Check if currently unauthorized
+    pub async fn is_unauthorized(&self) -> bool {
+        let state = self.unauthorized_state.read().await;
+        *state
     }
 }
