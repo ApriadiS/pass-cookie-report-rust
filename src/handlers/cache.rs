@@ -12,75 +12,105 @@ pub async fn force_refresh_data(
     State(state): State<AppState>,
     Json(payload): Json<Payload>,
 ) -> impl IntoResponse {
-    // Check if force_refresh is already running
-    if !state.start_admin_operation("force_refresh").await {
-        return (StatusCode::CONFLICT, Json(json!({
-            "status": "already_running",
-            "message": "Force refresh operation is already in progress"
-        })));
-    }
-
-    // Cleanup old jobs
-    state.cleanup_old_jobs().await;
-
     // Validasi payload
     if payload.cookie.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({
-            "status": "invalid_cookie",
+            "success": false,
             "message": "Cookie is required"
         })));
     }
 
-    // Hapus cache untuk range ini agar dipaksa fetch ulang
-    if let Ok(dates) = DateService::get_date_range(&payload.from, &payload.to) {
-        let mut cache_write = state.cache.write().await;
-        for date in &dates {
-            cache_write.remove(date);
+    // Normalize dates
+    let from_normalized = match DateService::normalize_date_for_api(&payload.from) {
+        Ok(d) => d,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "success": false,
+                "message": "Invalid from date format"
+            })));
         }
-        info!("[FORCE_REFRESH] Cleared cache for {} dates", dates.len());
-    }
-
-    // Start job dengan per-range tracking
-    let job_id = match state.start_job(payload.clone()).await {
-        Ok(id) => id,
-        Err(msg) => {
-            return (StatusCode::TOO_MANY_REQUESTS, Json(json!({
-                "status": "rejected",
-                "message": msg
+    };
+    let to_normalized = match DateService::normalize_date_for_api(&payload.to) {
+        Ok(d) => d,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "success": false,
+                "message": "Invalid to date format"
             })));
         }
     };
 
-    let state_clone = state.clone();
-    let payload_clone = payload.clone();
-    let job_id_clone = job_id.clone();
+    info!("[FORCE_REFRESH] Request: {} to {}", from_normalized, to_normalized);
 
-    tokio::spawn(async move {
-        let result = CacheService::fetch_and_cache_date_range_background(
-            payload_clone, state_clone.clone(), job_id_clone.clone()
-        ).await;
-        
-        let final_status = match result {
-            Ok(_) => {
-                info!("[JOB:{}] Force refresh completed successfully", job_id_clone);
-                crate::state::JobStatus::Completed
-            }
-            Err(e) => {
-                error!("[JOB:{}] Force refresh failed: {:?}", job_id_clone, e);
-                crate::state::JobStatus::Failed(format!("{:?}", e))
-            }
-        };
-        
-        state_clone.complete_job(&job_id_clone, final_status).await;
-        
-        // Mark admin operation as completed
-        state_clone.complete_admin_operation("force_refresh").await;
-    });
+    // Clear cache for this range
+    if let Ok(dates) = DateService::get_date_range(&from_normalized, &to_normalized) {
+        let mut cache_write = state.cache.write().await;
+        for date in &dates {
+            cache_write.remove(date);
+        }
+        info!("[FORCE_REFRESH] Cleared {} dates from cache", dates.len());
+    }
 
-    (StatusCode::OK, Json(json!({
-        "status": "force_refresh_started",
-        "job_id": job_id
-    })))
+    // Fetch directly with 2-loop (synchronous)
+    let refresh_payload = Payload {
+        from: from_normalized.clone(),
+        to: to_normalized.clone(),
+        cookie: payload.cookie.clone(),
+    };
+
+    match TransactionService::fetch_direct_two_loops(&refresh_payload).await {
+        Ok(response) => {
+            if !response.data.is_empty() {
+                let range_dates = DateService::get_date_range(&from_normalized, &to_normalized).unwrap();
+                let mut cache = state.cache.write().await;
+                let mut total_cached = 0;
+                
+                for date in range_dates {
+                    let date_data: Vec<_> = response.data.iter()
+                        .filter(|t| {
+                            if let Ok(normalized) = DateService::normalize_date_for_api(&t.tanggal_transaksi) {
+                                normalized == date
+                            } else {
+                                false
+                            }
+                        })
+                        .cloned()
+                        .collect();
+                    if !date_data.is_empty() {
+                        cache.insert(date, date_data);
+                        total_cached += 1;
+                    }
+                }
+                info!("[FORCE_REFRESH] Cached {} dates, {} transactions", total_cached, response.data.len());
+                drop(cache);
+                
+                if let Err(e) = CacheService::save_cache_to_file(&state).await {
+                    error!("[FORCE_REFRESH] Failed to save cache: {:?}", e);
+                }
+            }
+
+            state.set_unauthorized(false).await;
+            (StatusCode::OK, Json(json!({
+                "success": true,
+                "message": "Cache refreshed successfully",
+                "total_transactions": response.data.len()
+            })))
+        }
+        Err(e) => {
+            if matches!(e, DebugAppError::Unauthorized(_)) {
+                state.set_unauthorized(true).await;
+                return (StatusCode::UNAUTHORIZED, Json(json!({
+                    "success": false,
+                    "message": "Session expired or invalid cookie"
+                })));
+            }
+            error!("[FORCE_REFRESH] Failed: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "success": false,
+                "message": "Failed to refresh cache"
+            })))
+        }
+    }
 }
 
 pub async fn get_cached_data(
