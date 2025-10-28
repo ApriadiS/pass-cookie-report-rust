@@ -249,8 +249,16 @@ impl TransactionService {
 
         let body1 = response1.text().await?;
         
-        if body1.contains("<!-- resources/views/auth/login.blade.php -->") {
-            return Err(DebugAppError::Unauthorized("Session expired or invalid cookie".to_string()));
+        // Check for non-JSON response first
+        if body1.trim().is_empty() {
+            return Err(DebugAppError::Unauthorized("Empty response from API".to_string()));
+        }
+        
+        if !body1.trim_start().starts_with('{') {
+            if body1.contains("<!-- resources/views/auth/login.blade.php -->") {
+                return Err(DebugAppError::Unauthorized("Session expired or invalid cookie".to_string()));
+            }
+            return Err(DebugAppError::Unauthorized("API returned non-JSON response".to_string()));
         }
 
         let data1: Value = serde_json::from_str(&body1)?;
@@ -302,8 +310,16 @@ impl TransactionService {
 
         let body2 = response2.text().await?;
         
-        if body2.contains("<!-- resources/views/auth/login.blade.php -->") {
-            return Err(DebugAppError::Unauthorized("Session expired or invalid cookie".to_string()));
+        // Check for non-JSON response first
+        if body2.trim().is_empty() {
+            return Err(DebugAppError::Unauthorized("Empty response from API".to_string()));
+        }
+        
+        if !body2.trim_start().starts_with('{') {
+            if body2.contains("<!-- resources/views/auth/login.blade.php -->") {
+                return Err(DebugAppError::Unauthorized("Session expired or invalid cookie".to_string()));
+            }
+            return Err(DebugAppError::Unauthorized("API returned non-JSON response".to_string()));
         }
 
         let data2: Value = serde_json::from_str(&body2)?;
