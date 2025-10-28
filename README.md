@@ -1,4 +1,4 @@
-# 🦀 Pass Cookie Report Rust v1.2.0
+# 🦀 Pass Cookie Report Rust v1.2.5
 
 A high-performance Rust-based API server for transaction reporting with intelligent caching and multi-architecture Docker support.
 
@@ -60,7 +60,7 @@ chmod +x deploy-arm64.sh
 |--------|----------|-------------|
 | `GET` | `/` | Health check |
 | `POST` | `/data-cached` | Get cached transaction data with smart fetching |
-| `POST` | `/force-refresh` | Force refresh all cache from database |
+| `POST` | `/force-refresh` | Force refresh all cache from database (synchronous) |
 | `POST` | `/login` | Login endpoint for authentication |
 
 ### Example Usage
